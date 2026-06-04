@@ -14,3 +14,7 @@ yarn-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Terraform build artifacts
+**/.terraform/
+**/terraform.exe
