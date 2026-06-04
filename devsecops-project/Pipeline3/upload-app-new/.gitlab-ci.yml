@@ -1,0 +1,44 @@
+﻿image: hashicorp/terraform:1.6.0
+
+variables:
+  TF_ROOT: terraform
+
+cache:
+  key: "\"
+  paths:
+    - \/.terraform
+
+before_script:
+  - cd \
+  - terraform init
+
+stages:
+  - validate
+  - plan
+  - apply
+
+validate:
+  stage: validate
+  script:
+    - terraform validate
+
+plan:
+  stage: plan
+  script:
+    - terraform plan -out=plan.tfplan
+  artifacts:
+    paths:
+      - \/plan.tfplan
+  only:
+    - merge_requests
+    - main
+
+apply:
+  stage: apply
+  script:
+    - terraform apply -auto-approve plan.tfplan
+  when: manual
+  dependencies:
+    - plan
+  only:
+    - main

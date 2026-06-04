@@ -1,3 +1,0 @@
-# New Document
-
-Start typing here...

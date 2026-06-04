@@ -1,0 +1,148 @@
+# Fichier: .gitlab-ci.yml
+# Configuration du pipeline CI/CD pour notre application
+
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+
+variables:
+  APP_NAME: "todo-app"
+  APP_VERSION: "1.0.${CI_PIPELINE_IID}"
+  GIT_DEPTH: 50
+
+############################################
+# STAGE 1: BUILD
+############################################
+build-job:
+  stage: build
+  image: node:20
+  script:
+    - echo "📦 Installation des dépendances..."
+    - npm install
+    - echo "✅ Build terminé!"
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+############################################
+# STAGE 2: TEST
+############################################
+test-job:
+  stage: test
+  image: node:20
+  script:
+    - echo "🧪 Exécution des tests..."
+    - npm test || echo "⚠️  Aucun test défini"
+  allow_failure: true
+
+############################################
+# STAGE 3: SECURITY
+############################################
+security-secrets-scan:
+  stage: security
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl tar
+    - curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz | tar xz
+    - mv gitleaks /usr/local/bin/
+    - chmod +x /usr/local/bin/gitleaks
+  script:
+    - echo "🔍 Scan de secrets..."
+    - gitleaks detect --source=. --verbose --no-git --redact || echo "⚠️  Secrets trouvés - À corriger!"
+  allow_failure: true
+
+security-dependencies-scan:
+  stage: security
+  image: node:20
+  script:
+    - echo "🔍 Scan des vulnérabilités..."
+    - npm audit --production || echo "⚠️  Vulnérabilités ignorées"
+  allow_failure: true
+
+############################################
+# STAGE 4: PACKAGE
+############################################
+package-docker:
+  stage: package
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "🐳 Construction de l'image Docker..."
+    - docker build -t $APP_NAME:$APP_VERSION .
+    - docker tag $APP_NAME:$APP_VERSION $APP_NAME:latest
+    - echo "✅ Image Docker créée!"
+    # Sauvegarder l'image pour les stages suivants
+    - mkdir -p docker-image
+    - docker save $APP_NAME:$APP_VERSION | gzip > docker-image/$APP_NAME.tar.gz
+    - ls -la docker-image/
+  artifacts:
+    paths:
+      - docker-image/
+    expire_in: 1 hour
+  only:
+    - main
+
+############################################
+# STAGE 5: DEPLOY
+############################################
+deploy-staging:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "🚀 Déploiement en staging..."
+    # Charger l'image depuis les artifacts
+    - ls -la docker-image/
+    - docker load < docker-image/$APP_NAME.tar.gz
+    - docker images | grep $APP_NAME
+    # Déployer
+    - docker stop todo-app-staging 2>/dev/null || true
+    - docker rm todo-app-staging 2>/dev/null || true
+    - docker run -d --name todo-app-staging -p 3000:3000 $APP_NAME:$APP_VERSION
+    - echo "✅ Application déployée sur staging!"
+    - docker ps | grep todo-app
+  environment:
+    name: staging
+    url: http://staging.todo-app.local:3000
+  only:
+    - main
+  needs:
+    - package-docker
+
+deploy-production:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "🚀 Déploiement en PRODUCTION..."
+    # Charger l'image depuis les artifacts
+    - ls -la docker-image/
+    - docker load < docker-image/$APP_NAME.tar.gz
+    - docker images | grep $APP_NAME
+    # Déployer
+    - docker stop todo-app-prod 2>/dev/null || true
+    - docker rm todo-app-prod 2>/dev/null || true
+    - docker run -d --name todo-app-prod -p 8080:3000 $APP_NAME:$APP_VERSION
+    - echo "✅ Application déployée en PRODUCTION!"
+    - docker ps | grep todo-app
+  environment:
+    name: production
+    url: http://www.todo-app.com
+  when: manual
+  only:
+    - main
+  needs:
+    - package-docker

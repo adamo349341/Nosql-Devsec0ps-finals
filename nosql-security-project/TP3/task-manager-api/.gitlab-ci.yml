@@ -1,0 +1,138 @@
+# ============================================================
+#  GitLab CI/CD Pipeline — Task Manager API
+#  Stages: build → test → security → build-image → deploy-staging
+# ============================================================
+
+image: node:20-slim
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  MONGO_URI: "mongodb://localhost:27017/taskdb"
+
+stages:
+  - build
+  - test
+  - security
+  - build-image
+  - deploy-staging
+
+# ─────────────────────────────────────────────
+# STAGE 1 — BUILD
+# ─────────────────────────────────────────────
+build-job:
+  stage: build
+  script:
+    - echo "📦 Installing dependencies..."
+    - npm ci
+    - echo "✅ Build complete"
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+  cache:
+    key: $CI_COMMIT_REF_SLUG
+    paths:
+      - node_modules/
+
+# ─────────────────────────────────────────────
+# STAGE 2 — TEST (avec MongoDB service réel)
+# ─────────────────────────────────────────────
+test-job:
+  stage: test
+  services:
+    - name: mongo:7
+      alias: localhost
+  variables:
+    MONGO_URI: "mongodb://localhost:27017/taskdb"
+  script:
+    - echo "🧪 Running tests..."
+    - npm run test:ci
+    - echo "✅ All tests passed"
+  coverage: '/Lines\s*:\s*(\d+\.?\d*)%/'
+  artifacts:
+    when: always
+    paths:
+      - coverage/
+    expire_in: 1 week
+  dependencies:
+    - build-job
+
+# ─────────────────────────────────────────────
+# STAGE 3 — SECURITY
+# ─────────────────────────────────────────────
+security-dependencies-scan:
+  stage: security
+  script:
+    - echo "🔍 Scanning dependencies for vulnerabilities..."
+    - npm audit --audit-level=high || true
+    - echo "✅ Dependency scan complete"
+  dependencies:
+    - build-job
+security-secrets-scan:
+  stage: security
+  image: node:20-slim
+  script:
+    - echo "🔐 Scanning for secrets..."
+    - npx trufflehog@latest filesystem . --only-verified || true
+    - echo "✅ Secrets scan complete"
+  allow_failure: true
+  dependencies: []
+
+# ─────────────────────────────────────────────
+# STAGE 4 — BUILD IMAGE
+# ─────────────────────────────────────────────
+build-image:
+  stage: build-image
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - echo "🐳 Building Docker image..."
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest .
+    - docker push $IMAGE_NAME:$IMAGE_TAG
+    - docker push $IMAGE_NAME:latest
+    - echo "✅ Image pushed → $IMAGE_NAME:$IMAGE_TAG"
+  dependencies: []
+  only:
+    - main
+
+# ─────────────────────────────────────────────
+# STAGE 5 — DEPLOY STAGING
+# ─────────────────────────────────────────────
+deploy-staging:
+  stage: deploy-staging
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$STAGING_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - ssh-keyscan -H $STAGING_HOST >> ~/.ssh/known_hosts
+  script:
+    - echo "🚀 Deploying to staging..."
+    - |
+      ssh $STAGING_USER@$STAGING_HOST "
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker pull $IMAGE_NAME:$IMAGE_TAG &&
+        docker stop task-api 2>/dev/null || true &&
+        docker rm task-api 2>/dev/null || true &&
+        docker run -d \
+          --name task-api \
+          --restart unless-stopped \
+          -p 3000:3000 \
+          -e MONGO_URI=$STAGING_MONGO_URI \
+          -e NODE_ENV=staging \
+          $IMAGE_NAME:$IMAGE_TAG
+      "
+    - echo "✅ Deployed to staging successfully"
+  environment:
+    name: staging
+    url: http://$STAGING_HOST:3000
+  dependencies: []
+  only:
+    - main

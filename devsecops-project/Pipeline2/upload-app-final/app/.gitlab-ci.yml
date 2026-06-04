@@ -1,0 +1,119 @@
+# Fichier: .gitlab-ci.yml
+# Pipeline CI/CD pour l'application Node.js avec Docker
+
+stages:
+  - build
+  - test
+  - security
+  - package
+  - deploy
+
+variables:
+  APP_NAME: "todo-app"
+  APP_VERSION: "1.0.0"
+
+# -----------------------------
+# STAGE 1: BUILD
+# -----------------------------
+build-job:
+  stage: build
+  image: node:18
+  script:
+    - echo "Installation des dépendances..."
+    - npm install
+    - echo "Vérification syntaxe app.js et tasks.js..."
+    - node -c app.js
+    - node -c tasks.js
+    - echo "Build terminé"
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1h
+
+# -----------------------------
+# STAGE 2: TEST
+# -----------------------------
+test-job:
+  stage: test
+  image: node:18
+  script:
+    - echo "Exécution des tests unitaires..."
+    - npm test
+    - echo "Tests OK!"
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+# -----------------------------
+# STAGE 3: SECURITY
+# -----------------------------
+security-secrets-scan:
+  stage: security
+  image: zricethezav/gitleaks:latest
+  script:
+    - echo "Recherche de secrets..."
+    - gitleaks detect --source=. --verbose --no-git
+    - echo "Aucun secret détecté"
+  allow_failure: false
+
+security-dependencies-scan:
+  stage: security
+  image: node:18
+  script:
+    - echo "Vulnérabilités dans les dépendances..."
+    - npm audit --audit-level=high
+    - echo "Pas de vulnérabilités critiques"
+  allow_failure: false
+
+# -----------------------------
+# STAGE 4: PACKAGE (Docker)
+# -----------------------------
+package-docker:
+  stage: package
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - echo "Construction de l'image Docker..."
+    - docker build -t $APP_NAME:$APP_VERSION .
+    - docker build -t $APP_NAME:latest .
+    - docker images
+  only:
+    - main
+
+# -----------------------------
+# STAGE 5: DEPLOY
+# -----------------------------
+deploy-staging:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - echo "Déploiement sur staging..."
+    - docker stop todo-app-staging || true
+    - docker rm todo-app-staging || true
+    - docker run -d --name todo-app-staging -p 3000:3000 $APP_NAME:$APP_VERSION
+    - echo "Staging OK"
+  environment:
+    name: staging
+    url: http://staging.todo-app.local:3000
+  only:
+    - main
+
+deploy-production:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - echo "Déploiement en production..."
+    - docker stop todo-app-prod || true
+    - docker rm todo-app-prod || true
+    - docker run -d --name todo-app-prod -p 8080:3000 $APP_NAME:$APP_VERSION
+    - echo "Production OK"
+  environment:
+    name: production
+    url: http://www.todo-app.com
+  when: manual
+  only:
+    - main
+ 

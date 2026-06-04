@@ -14,9 +14,15 @@ This directory contains the final deliverables for the DevSecOps module.
 - `.gitlab-ci.yml`: GitLab CI pipeline definition.
 - `docker-compose.yml`: demo deployment stack.
 
-## Related repositories and archive files
+## Imported DevSecOps projects
 
-- `secnotes-devsecops.git`
-- `upload-app-final.git`
-- `upload-app-new.rar`
-- `file upload app.rar`
+- `Pipeline1/secnotes-devsecops`
+- `Pipeline2/upload-app-final`
+- `Pipeline3/upload-app-new`
+- `Pipeline4/file-upload-app`
+- `Pipeline5/nodejstp`
+
+## Notes
+
+- These project copies were moved into the proper Pipeline folders to keep the workspace organized.
+- Nested Git metadata was removed so the workspace can be committed cleanly as a single repository.
