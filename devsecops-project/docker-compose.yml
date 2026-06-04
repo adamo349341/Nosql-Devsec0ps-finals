@@ -1,0 +1,6 @@
+version: '3.8'
+services:
+  ci-demo:
+    image: alpine:latest
+    command: ["sh", "-c", "echo 'DevSecOps project placeholder' && sleep 3600"]
+    restart: unless-stopped

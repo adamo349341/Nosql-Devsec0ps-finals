@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "name": "Buy groceries",
+    "date": "2025-10-25"
+  },
+  {
+    "id": 2,
+    "name": "Morning run",
+    "date": "2025-10-26"
+  },
+  {
+    "id": 3,
+    "name": "Doctor appointment",
+    "date": "2025-10-27"
+  },
+  {
+    "id": 4,
+    "name": "Team meeting",
+    "date": "2025-10-28"
+  },
+  {
+    "id": 5,
+    "name": "Pay bills",
+    "date": "2025-10-30"
+  }
+]

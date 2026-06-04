@@ -1,0 +1,6 @@
+version: '3.8'
+services:
+  app:
+    image: alpine:latest
+    command: ["sh", "-c", "echo 'NoSQL security project placeholder' && sleep 3600"]
+    restart: unless-stopped

@@ -1,0 +1,145 @@
+stages:
+  - build
+  - test
+  - security
+  - build-image
+  - deploy-staging
+  - deploy-kubernetes
+
+variables:
+  APP_NAME: "todo-app"
+  TF_DIR: "application terraform/aws-staging"
+  AWS_DEFAULT_REGION: eu-west-1
+
+# ================================================
+# BUILD — node/npm installé sur la machine locale
+# ================================================
+build-job:
+  stage: build
+  tags:
+    - kubernetes
+  script:
+    - npm install
+    - node -c server.js
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1h
+
+# ================================================
+# TEST
+# ================================================
+test-job:
+  stage: test
+  tags:
+    - kubernetes
+  script:
+    - npm install
+    - npm test
+
+# ================================================
+# SECURITY — gitleaks installé sur la machine
+# ================================================
+security-secrets-scan:
+  stage: security
+  tags:
+    - kubernetes
+  script:
+    - gitleaks detect --source=. --verbose --no-git --redact
+  allow_failure: true
+
+security-dependencies-scan:
+  stage: security
+  tags:
+    - kubernetes
+  script:
+    - npm install
+    - npm audit --audit-level=high
+  allow_failure: true
+
+# ================================================
+# BUILD IMAGE — Docker Desktop installé sur la machine
+# ================================================
+build-image:
+  stage: build-image
+  tags:
+    - kubernetes
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}" -t "${CI_REGISTRY_IMAGE}:latest" .
+    - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - docker push "${CI_REGISTRY_IMAGE}:latest"
+    - "echo IMAGE_TAG=$CI_COMMIT_SHORT_SHA | Out-File -FilePath deploy.env -Encoding utf8 -NoNewline"
+  artifacts:
+    reports:
+      dotenv: deploy.env
+  only:
+    - main
+
+# ================================================
+# DEPLOY STAGING — Terraform + AWS CLI installés
+# ================================================
+deploy-staging:
+  stage: deploy-staging
+  tags:
+    - kubernetes
+  allow_failure: true
+  before_script:
+    - aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+    - aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+    - aws configure set region "$AWS_DEFAULT_REGION"
+    - aws sts get-caller-identity
+    - Set-Location "$TF_DIR"
+    - terraform init
+    - |
+      @"
+      aws_region = "$AWS_DEFAULT_REGION"
+      docker_image = "$CI_REGISTRY_IMAGE"
+      docker_tag = "$IMAGE_TAG"
+      registry_url = "$CI_REGISTRY"
+      registry_user = "$CI_REGISTRY_USER"
+      registry_password = "$CI_REGISTRY_PASSWORD"
+      instance_type = "t3.micro"
+      "@ | Out-File -FilePath terraform.tfvars -Encoding utf8
+  script:
+    - terraform validate
+    - terraform plan -out=tfplan
+    - terraform apply -auto-approve tfplan
+    - Write-Host "IP publique de l'instance staging:"
+    - terraform output staging_public_ip
+  dependencies:
+    - build-image
+  environment:
+    name: staging
+  when: manual
+  only:
+    - main
+
+# ================================================
+# DEPLOY KUBERNETES — kubectl installé sur la machine
+# ================================================
+deploy-kubernetes:
+  stage: deploy-kubernetes
+  tags:
+    - kubernetes
+  before_script:
+    - New-Item -ItemType Directory -Force -Path "$HOME\.kube"
+    - $bytes = [System.Convert]::FromBase64String($env:KUBECONFIG_CONTENT)
+    - "[System.IO.File]::WriteAllBytes(\"$HOME\\.kube\\config\", $bytes)"
+    - kubectl cluster-info
+  script:
+    - kubectl create namespace todo-app --dry-run=client -o yaml | kubectl apply -f -
+    - kubectl create secret docker-registry gitlab-registry-secret --docker-server=$CI_REGISTRY --docker-username=$CI_REGISTRY_USER --docker-password=$CI_REGISTRY_PASSWORD --namespace=todo-app --dry-run=client -o yaml | kubectl apply -f -
+    - (Get-Content k8deployment.yml) -replace 'registry.gitlab.com/adammentagui8/todo-app:latest', "${env:CI_REGISTRY_IMAGE}:${env:IMAGE_TAG}" | Set-Content k8deployment.yml
+    - kubectl apply -f k8deployment.yml
+    - kubectl rollout status deployment/todo-app -n todo-app --timeout=120s
+    - kubectl get pods -n todo-app
+    - kubectl get services -n todo-app
+  dependencies:
+    - build-image
+  environment:
+    name: kubernetes
+  when: manual
+  only:
+    - main

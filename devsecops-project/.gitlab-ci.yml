@@ -1,0 +1,19 @@
+stages:
+  - build
+  - test
+  - deploy
+
+build_job:
+  stage: build
+  script:
+    - echo "Build stage placeholder"
+
+test_job:
+  stage: test
+  script:
+    - echo "Test stage placeholder"
+
+deploy_job:
+  stage: deploy
+  script:
+    - echo "Deploy stage placeholder"
